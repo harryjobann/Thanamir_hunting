@@ -231,13 +231,10 @@ print(summary(gam_hunter))
 # -----------------------------------------------------------
 # Summary: Hunters vs Non-Hunters (wild meat only)
 # -----------------------------------------------------------
-# Overall totals show hunters ate slightly more wild meat than non-hunters across the year, 55% vs 45%. So not a massive gap, but 
-# hunters do take the bigger share.
-#
-# The Poisson regression backs this up. Hunters consumed more than twice as much wild meat as non-hunters (IRR = 2.27, 95% CI 1.97–2.61,
+# Hunters consumed more than twice as much wild meat as non-hunters (IRR = 2.27, 95% CI 1.97–2.61,
 # p < 0.001). That’s a strong and highly significant difference.
 #
-# The GAM smooths don’t add much extra. The seasonal wiggles for hunters and non-hunters aren’t statistically significant. But the
+# The GAM smooths don’t add much extra insight. The seasonal variations for hunters and non-hunters aren’t statistically significant. But the
 # explained deviance is decent, around 39 percent, which means the model still picks up a fair chunk of the variation.
 #
 # Overall, hunters are clearly the heavier consumers of wild meat, with more than double the intake of non-hunters, even if the seasonal
@@ -391,7 +388,7 @@ p_vals
 # Summary: Wealth & Power Effects on Wild Meat Consumption
 # -----------------------------------------------------------
 # 1. Household-level linear model (reliance_wild ~ wealth + power)
-#    → Nothing doing here. Total reliance on wild meat looks
+#    → Nothing going on here. Total reliance on wild meat looks
 #    pretty similar across wealth/power groups once you average
 #    it all up at the household level.
 #
@@ -553,7 +550,6 @@ print(mn_pvals)
 
 
 
-
 # ----------------------------------------------------------------------------------------------------------
 # Taxonomic category differences
 # ----------------------------------------------------------------------------------------------------------
@@ -656,3 +652,159 @@ print(mn_pvals_cat)
 # in particular stands out, when birds decline, “other” taxa surge,
 # and the overall mix of wild meat looks quite different.
 # -----------------------------------------------------------
+
+
+
+
+unique(consumption_df$month)
+
+
+
+# --------------------------------------------------------------------------------
+# Species-level GLM/GAM: wild meat consumption over months
+# --------------------------------------------------------------------------------
+
+# Collapse to monthly totals by category and create a time index
+monthly_category <- consumption_df %>%
+  dplyr::filter(meat == "wild") %>%
+  dplyr::group_by(month, category) %>%
+  dplyr::summarise(total = sum(times, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::mutate(
+    month_date = as.Date(month),          # convert yearmon to Date (first of month)
+    t = as.numeric(month),                # numeric index for modelling
+    category = as.factor(category)
+  )
+
+# -------------------------------
+# GAM: 
+# -------------------------------
+gam_cat <- mgcv::gam(
+  total ~ category + s(t, by = category, k = 6),
+  data   = monthly_category,
+  family = quasipoisson()
+)
+
+monthly_category$pred_gam <- stats::predict(gam_cat, type = "response")
+
+ggplot2::ggplot(monthly_category, ggplot2::aes(x = month_date, colour = category)) +
+  ggplot2::geom_point(ggplot2::aes(y = total), alpha = 0.6) +
+  ggplot2::geom_line(ggplot2::aes(y = pred_gam), linewidth = 1.2) +
+  ggplot2::scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  ggplot2::scale_y_log10() +
+  ggplot2::labs(
+    title = "Wild meat consumption by category over time (GAM)",
+    subtitle = "Points = monthly totals; lines = GAM smooths",
+    x = "Month", y = "Consumption events (log scale)"
+  ) +
+  ggplot2::theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+
+# -------------------------------
+# GLM: 
+# -------------------------------
+glm_cat <- stats::glm(
+  total ~ t * category,
+  data   = monthly_category,
+  family = stats::quasipoisson()
+)
+
+monthly_category$pred_glm <- stats::predict(glm_cat, type = "response")
+
+ggplot2::ggplot(monthly_category, ggplot2::aes(x = month_date, colour = category)) +
+  ggplot2::geom_point(ggplot2::aes(y = total), alpha = 0.6) +
+  ggplot2::geom_line(ggplot2::aes(y = pred_glm), linewidth = 1.2) +
+  ggplot2::scale_x_date(date_labels = "%b %Y", date_breaks = "1 month") +
+  ggplot2::scale_y_log10() +
+  ggplot2::labs(
+    title = "Wild meat consumption by category over time (GLM)",
+    subtitle = "Points = monthly totals; lines = GLM log-linear fits",
+    x = "Month", y = "Consumption events (log scale)"
+  ) +
+  ggplot2::theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+
+# Model summaries
+print(summary(gam_cat))
+print(summary(glm_cat))
+
+
+
+# --------------------------------------------------------------------------------
+# Summary: Category-level temporal patterns (GLM vs GAM)
+# --------------------------------------------------------------------------------
+# GLM (straight-line log trends):
+# - Finds an overall decline in wild meat events through the year (p ~0.006).
+# - Wild large mammals start from much lower totals than birds, but their slope
+#   is significantly more positive (p ~0.003), meaning they increase over time.
+# - Pheasants show a weaker version of the same pattern (borderline p ~0.08).
+# - Other categories (rodents, small mammals, "other") show no clear trends,
+#   probably due to their low counts.
+#
+# GAM (seasonal smooths):
+# - Birds show strong evidence of seasonal peaks and troughs (p <0.001).
+# - Wild large mammals also show a significant seasonal pattern (p ~0.005).
+# - Most other categories are flat (not significant), again likely because
+#   they’re relatively minor in the dataset.
+#
+# Takeaway:
+# - Both models agree that birds dominate and that large mammals show
+#   meaningful variation across the year.
+# - The GLM captures the broad, straight-line picture (overall downward, with
+#   large mammals rising), while the GAM shows the more realistic seasonal
+#   wiggles.
+# - For interpretation, the GAM is probably the better fit here, but the GLM
+#   is useful as a simpler cross-check.
+
+
+
+
+
+
+
+
+
+
+
+# --------------------------------------------------------------------------------
+# Critical Insights from the Analysis
+# --------------------------------------------------------------------------------
+# 1. Overall temporal pattern:
+# - Wild meat consumption fluctuates over the year with clear peaks and troughs.
+# - Domestic meat is consistently present, but wild dominates at certain points.
+#
+# 2. Hunters vs non-hunters:
+# - Hunters consume more than twice as much wild meat as non-hunters (IRR ~2.3).
+# - Seasonal ups and downs look similar between the two groups, so the difference
+#   is in volume, not timing.
+#
+# 3. Sources of wild meat:
+# - Hunting is the main source, but gifting and buying also matter.
+# - Wealthiest households buy more wild meat; mid-wealth groups rely more on hunting.
+# - Power has no consistent effect on either total consumption or access route.
+#
+# 4. Subtribe differences:
+# - Reliance on wild vs domestic varies: Chirr/Langa rely most on wild (~62–64%),
+#   Tikhir are middling (~57%), Makury least (~41%).
+# - Differences are statistically significant (chi-square p ~0.005).
+# - However, the way wild meat is sourced (hunt/gift/buy) doesn’t differ much
+#   between subtribes.
+#
+# 5. Taxonomic categories:
+# - Birds dominate the wild meat diet (≈58%), followed by large mammals (17%).
+# - Seasonal shifts are marked: birds dip in autumn, “other” taxa surge, and
+#   large mammals peak in winter/spring.
+#
+#
+# 6. Temporal modelling (GLM vs GAM):
+# - GLM: overall decline in wild meat over the year, with large mammals showing
+#   a counter-trend increase.
+# - GAM: birds and large mammals both show clear seasonal cycles, while other
+#   groups are flat.
+# - GAM captures seasonal detail; GLM provides a simpler straight-line picture.
+
+
+
+
+
+
