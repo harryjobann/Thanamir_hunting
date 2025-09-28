@@ -467,18 +467,34 @@ glm_subtribe <- stats::glm(
   family  = stats::binomial()
 )
 
-# D) Seasonality by subtribe (wild-only), simple and readable
-wild_season_subtribe <- consumption_df %>%
+
+
+# D) Seasonality by subtribe (wild-only), adjusted per household
+wild_season_rate <- consumption_df %>%
   dplyr::filter(meat == "wild") %>%
   dplyr::group_by(season, subtribe) %>%
-  dplyr::summarise(total = sum(times, na.rm = TRUE), .groups = "drop")
+  dplyr::summarise(total = sum(times, na.rm = TRUE), .groups = "drop") %>%
+  # divide by number of unique households in each subtribe
+  dplyr::left_join(
+    consumption_df %>%
+      dplyr::distinct(id, subtribe) %>%
+      dplyr::count(subtribe, name = "n_households"),
+    by = "subtribe"
+  ) %>%
+  dplyr::mutate(events_per_hh = total / n_households)
 
-ggplot2::ggplot(wild_season_subtribe,
-                ggplot2::aes(x = season, y = total, group = subtribe, colour = subtribe)) +
+ggplot2::ggplot(
+  wild_season_rate,
+  ggplot2::aes(x = season, y = events_per_hh, group = subtribe, colour = subtribe)
+) +
   ggplot2::geom_line(linewidth = 1.1) +
   ggplot2::geom_point() +
-  ggplot2::labs(title = "Wild meat over seasons by subtribe",
-                y = "Consumption events", x = "Season")
+  ggplot2::labs(
+    title = "Wild meat per household by season and subtribe",
+    y = "Consumption events per household",
+    x = "Season"
+  )
+
 
 # E) Source among wild meat: are subtribes different (gifted / hunted / bought)?
 library(nnet)
@@ -508,7 +524,6 @@ print(overall_subtribe %>% dplyr::arrange(subtribe, dplyr::desc(share)), n = Inf
 print(chisq_meat_subtribe)
 print(summary(glm_subtribe))
 print(mn_pvals)
-
 
 
 
@@ -655,9 +670,7 @@ print(mn_pvals_cat)
 
 
 
-
 unique(consumption_df$month)
-
 
 
 # --------------------------------------------------------------------------------
@@ -763,9 +776,6 @@ print(summary(glm_cat))
 
 
 
-
-
-
 # --------------------------------------------------------------------------------
 # Critical Insights from the Analysis
 # --------------------------------------------------------------------------------
@@ -807,4 +817,112 @@ print(summary(glm_cat))
 
 
 
+
+
+
+# --------------------------------------------------------------------------------
+# Code additions 28th Sept
+# --------------------------------------------------------------------------------
+
+
+
+
+
+# --------------------------
+### Source of wild meat ###
+# --------------------------
+
+# Visualise source of wild meat by wealth group
+wild_source_plot <- consumption_df %>%
+  dplyr::filter(meat == "wild") %>%
+  dplyr::group_by(wealth, source) %>%
+  dplyr::summarise(total = sum(times, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::group_by(wealth) %>%
+  dplyr::mutate(share = total / sum(total))
+
+ggplot2::ggplot(wild_source_plot,
+                ggplot2::aes(x = wealth, y = share, fill = source)) +
+  ggplot2::geom_col(position = "fill") +
+  ggplot2::labs(
+    title = "How wealth shapes the source of wild meat",
+    x = "Wealth group",
+    y = "Share of wild meat events",
+    fill = "Source"
+  )
+
+
+# --------------------------
+### Sub-tribe ###
+# --------------------------
+
+# Household-level cross-tab: subtribe x wealth
+wealth_by_subtribe <- consumption_df %>%
+  dplyr::distinct(id, subtribe, wealth)
+
+xt_wealth <- table(wealth_by_subtribe$subtribe, wealth_by_subtribe$wealth)
+print(xt_wealth)
+
+chisq.test(xt_wealth)
+
+
+# Household-level cross-tab: subtribe x hunter
+hunter_by_subtribe <- consumption_df %>%
+  dplyr::distinct(id, subtribe, hunter)
+
+xt_hunter <- table(hunter_by_subtribe$subtribe, hunter_by_subtribe$hunter)
+print(xt_hunter)
+
+chisq.test(xt_hunter)
+
+
+# Event-level logistic regression, weighted by times
+glm_subtribe_controls <- glm(
+  I(meat == "wild") ~ subtribe + wealth + hunter,
+  data    = consumption_df,
+  weights = times,
+  family  = binomial()
+)
+
+summary(glm_subtribe_controls)
+
+
+# Interpretation
+
+# Wealth doesn’t differ much across subtribes.
+# Hunter status does differ descriptively (Makury mostly non-hunters), but once you control for that, 
+# Makury still show lower wild-meat consumption.
+# This suggests there is an independent subtribe effect — Makury rely more on domestic meat regardless of wealth or hunter status.
+
+
+
+
+
+
+
+# --------------------------
+### taxonomy ###
+# --------------------------
+
+# Simplify categories into birds vs large mammals vs other
+taxon_season <- consumption_df %>%
+  dplyr::filter(meat == "wild") %>%
+  dplyr::mutate(taxon_group = dplyr::case_when(
+    grepl("bird", category, ignore.case = TRUE) ~ "Birds",
+    grepl("largemammal", category, ignore.case = TRUE) ~ "Large mammals",
+    TRUE ~ "Other"
+  )) %>%
+  dplyr::group_by(season, taxon_group) %>%
+  dplyr::summarise(total = sum(times, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::group_by(season) %>%
+  dplyr::mutate(share = total / sum(total))
+
+ggplot2::ggplot(taxon_season,
+                ggplot2::aes(x = season, y = share, fill = taxon_group)) +
+  ggplot2::geom_col() +
+  ggplot2::labs(
+    title = "Seasonal composition of wild meat (birds vs mammals)",
+    x = "Season",
+    y = "Share of wild meat consumption",
+    fill = "Taxon group"
+  )
 

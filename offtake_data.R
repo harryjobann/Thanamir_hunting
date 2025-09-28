@@ -347,53 +347,37 @@ models_by_species %>%
 
 
 # -----------------------------------------------------
-# Ramya feedback edit 25/08: Regroup species into categories based on size & hunting method
+# Regroup species into categories based on size 
 # -----------------------------------------------------
-# This grouping reflects how hunters actually distinguish species:
-# - Smaller vs larger rodents/carnivores hunted with different methods
-# - Birds vs pheasants as separate groups
-# - Ungulates, primates, fish, amphibians kept distinct
+
+unique(offtake_df$species)
 
 
 
 offtake_df <- offtake_df %>%
   dplyr::mutate(
     size_group = dplyr::case_when(
-      # Primates
-      species %in% c("assamese_macaque", "macaque_sp", "stump_tailed_macaque") ~ "primate",
+      # Fish & amphibians combined
+      species %in% c("fish", "frogs") ~ "fish",
       
-      # Ungulates
-      species %in% c("barking_deer", "serow", "wild_boar") ~ "ungulate",
+      # Birds split by size
+      species %in% c("kalij_pheasant") ~ "large_bird",
+      species %in% c("birds", "green_pigeon", "bamboo_partridge", "hill_partridge") ~ "small_bird",
       
-      # Rodents split by size
-      species %in% c("squirrel", "flying_squirrel", "giant_squirrel") ~ "small_rodent",
-      species %in% c("bamboo_rat", "brush_tailed_porcupine", "malayan_porcupine") ~ "large_rodent",
+      # Large mammals (explicit list)
+      species %in% c("barking_deer", "serow", "wild_boar", "dhole",
+                     "malayan_porcupine", "malayan_porcupine ") ~ "large_mammal",
       
-      # Carnivores split by size
-      species %in% c("civet", "himalayan_palm_civet", "spotted_linsang") ~ "small_carnivore",
-      species %in% c("leopard_cat", "dhole") ~ "large_carnivore",
-      
-      # Birds vs pheasants
-      species %in% c("birds", "green_pigeon") ~ "bird",
-      species %in% c("bamboo_partridge", "kalij_pheasant", "hill_partridge") ~ "pheasant",
-      
-      # Fish & Amphibians
-      species == "fish" ~ "fish",
-      species == "frogs" ~ "amphibian",
-      
-      # Catch-all
-      TRUE ~ "other"
+      # Everything else defaults to small mammals for this dataset
+      TRUE ~ "small_mammal"
     )
   )
 
 # Check the new grouping
 table(offtake_df$size_group, useNA = "ifany")
-
-
-
 unique(offtake_df$species)
 
-
+# Time series prep and modelling (unchanged aside from new groups)
 weekly_taxa <- offtake_df %>%
   dplyr::group_by(size_group, week_index) %>%
   dplyr::summarise(total = sum(individuals), .groups = "drop") %>%
@@ -401,11 +385,8 @@ weekly_taxa <- offtake_df %>%
   tsibble::as_tsibble(key = size_group, index = week_index) %>%
   tsibble::fill_gaps(total = 0, log_total = 0)
 
-
-
 models_by_group <- weekly_taxa %>%
   model(ARIMA(log_total))
-
 
 models_by_group %>%
   forecast(h = 5) %>%
@@ -415,6 +396,11 @@ models_by_group %>%
 
 
 
+
+# Sahil comment: move away from panel - group them into one plate with diff plate. Also add confidence internals shaded around.
+# edits to groups - one for carnivore
+
+# Understand more about the impact of seasonality - check with Ramya about importance of each season. 
 
 
 
@@ -429,43 +415,41 @@ offtake_df <- offtake_df |>
   dplyr::mutate(species = stringr::str_squish(tolower(species)))
 
 sp_mass_values <- sp_mass_values |>
-  dplyr::rename(species_raw = dplyr::matches("^species$", ignore.case = TRUE),
-                mass_kg_raw = dplyr::matches("mass", ignore.case = TRUE)) |>
+  dplyr::rename(
+    species_raw = dplyr::matches("^species$", ignore.case = TRUE),
+    mass_kg_raw = dplyr::matches("mass", ignore.case = TRUE)
+  ) |>
   dplyr::mutate(
     species_raw = stringr::str_squish(species_raw),
     mass_kg = as.numeric(mass_kg_raw)
   )
 
-
-# Map the names across each dataset
+# Map the names across each dataset (name standardisation only; no mass overrides)
 name_map <- tibble::tribble(
-  ~species_raw,                 ~species,                    ~mass_kg_override,
-  "Asiatic wild dog",           "dhole",                     16.850,
-  "Assamaese macaque",          "assamese_macaque",          9.400,
-  "Barking deer",               "barking_deer",              22.900,
-  "Brush tailed porcupine",     "brush_tailed_porcupine",     2.500,
-  "Hill partridge",             "hill_partridge",             0.319,
-  "Himalayan black bear",       "himalayan_black_bear",     103.600,
-  "Himalayan palm civet",       "himalayan_palm_civet",       4.270,
-  "Leopard cat",                "leopard_cat",                4.000,
-  "Red serow",                  "serow",                    135.000,
-  "Stumped tailed macaque",     "stump_tailed_macaque",       9.000,
-  "Yellow throated marten",     "yellow_throated_marten",     2.900
+  ~species_raw,                 ~species,
+  "Asiatic wild dog",           "dhole",
+  "Assamaese macaque",          "assamese_macaque",
+  "Barking deer",               "barking_deer",
+  "Brush tailed porcupine",     "brush_tailed_porcupine",
+  "Hill partridge",             "hill_partridge",
+  "Himalayan black bear",       "himalayan_black_bear",
+  "Himalayan palm civet",       "himalayan_palm_civet",
+  "Leopard cat",                "leopard_cat",
+  "Red serow",                  "serow",
+  "Stumped tailed macaque",     "stump_tailed_macaque",
+  "Yellow throated marten",     "yellow_throated_marten"
 )
 
-
-# Merge the map into sp_mass_values, fixing names and overriding mass where provided
+# Merge the map into sp_mass_values, fixing names only (no overrides)
 sp_mass_values <- sp_mass_values |>
   dplyr::left_join(name_map, by = "species_raw") |>
   dplyr::mutate(
-    species = dplyr::coalesce(species, stringr::str_squish(tolower(species_raw))),
-    mass_kg = dplyr::coalesce(mass_kg_override, mass_kg)  # prefer Ramya's figure when given
+    # Prefer the mapped canonical name when available; otherwise use cleaned original
+    species = dplyr::coalesce(species, stringr::str_squish(tolower(species_raw)))
   ) |>
   dplyr::select(species, mass_kg) |>
   dplyr::arrange(species) |>
   dplyr::distinct()
-
-
 
 # For any species in offtake_df that still aren’t present in sp_mass_values, add rows with NA
 missing_in_mass <- setdiff(unique(offtake_df$species), sp_mass_values$species)
@@ -477,22 +461,24 @@ if (length(missing_in_mass) > 0) {
     dplyr::arrange(species)
 }
 
-
 # Quick check: which species still have NA mass?
 na_mass <- sp_mass_values |>
   dplyr::filter(is.na(mass_kg)) |>
   dplyr::arrange(species)
 print(na_mass)
 
+# Ensure "green_pigeon" is explicitly in the birds category 
+taxon_cols <- intersect(c("category", "taxon", "taxa", "taxon_group"), names(offtake_df))
+if (length(taxon_cols) > 0) {
+  for (col in taxon_cols) {
+    offtake_df[[col]] <- ifelse(offtake_df$species == "green_pigeon", "birds", offtake_df[[col]])
+  }
+}
 
 
-# There are a few species with missing mass values, so i'll dig rough estimates from the literature for adult body mass.
-
-# Generic/unspecified categories (e.g. 'birds', 'fish', 'civet', 'squirrel', 'macaque_sp', 'flying_squirrel') are left as NA 
-# so we don't pretend to know their mass. This keeps biomass estimates transparent and conservative.
 
 
-
+# There are a few species with missing mass values, so i'll dig rough estimates for for adult body mass.
 
 # New literature-based estimates for named species only (Ofc, feel free to edit!)
 mass_lookup <- tibble::tribble(
@@ -500,14 +486,19 @@ mass_lookup <- tibble::tribble(
   "bamboo_partridge",     0.33,
   "bamboo_rat",           0.65,
   "giant_squirrel",       1.20,
-  "green_pigeon",         0.21,
   "kalij_pheasant",       0.80,
   "malayan_porcupine",   13.00,
   "spotted_linsang",      0.90,
-  "wild_boar",           70.00
+  "wild_boar",           70.00,
+  "civet",                4.30,
+  "flying_squirrel",      1.75,
+  "macaque_sp",           8.00,
+  "squirrel",             0.35
 )
 
-# Upsert into the existing table (keeps existing rows not listed; replaces/sets these)
+
+
+# put into the existing table 
 sp_mass_values <- sp_mass_values %>%
   dplyr::anti_join(mass_lookup, by = "species") %>%
   dplyr::bind_rows(mass_lookup) %>%
@@ -518,8 +509,6 @@ na_mass <- sp_mass_values |>
   dplyr::filter(is.na(mass_kg)) |>
   dplyr::arrange(species)
 print(na_mass)
-
-
 
 
 
@@ -595,8 +584,33 @@ weekly_biomass %>%
   theme(legend.position = "none")
 
 
-# much better, now we can proceed with the time series. 
+# much better, now we can proceed with the time series. Before we do that, lets quickly use the "groups" we created earlier
 
+
+
+# weekly biomass per size group
+weekly_biomass_group <- offtake_df %>%
+  dplyr::group_by(size_group, week_index) %>%
+  dplyr::summarise(total_biomass_kg = sum(biomass_kg, na.rm = TRUE), .groups = "drop") %>%
+  tsibble::as_tsibble(key = size_group, index = week_index) %>%
+  tsibble::fill_gaps(total_biomass_kg = 0) %>%
+  dplyr::mutate(log_biomass = log1p(total_biomass_kg))
+
+# Fit ARIMA models to log-biomass per group
+models_biomass_group <- weekly_biomass_group %>%
+  fabletools::model(ARIMA(log_biomass))
+
+
+
+weekly_biomass_group %>%
+  autoplot(log_biomass) +
+  ggplot2::labs(
+    title = "Weekly biomass offtake by size/method group (log scale)",
+    x = "Week index",
+    y = "log1p(total biomass, kg)"
+  ) +
+  ggplot2::theme_minimal() +
+  ggplot2::facet_wrap(~ size_group, ncol = 1, scales = "free_y")
 
 
 
@@ -697,55 +711,119 @@ model_compare
 # ---------------------------------------------------
 # Comparing the time series using counts (number of individuals) and biomass (kg)
 
-# Results:
-# - The counts model has much lower AIC and smaller residual variance, meaning the counts model explains the weekly time 
-# series pattern more efficiently.
-# - The biomass model is noisier: biomass fluctuates more than counts week-to-week.
-#
-
 # Interpretation:
-# Counts here are better for capturing general temporal trends (seasonality/short-term shifts), but biomass might be more useful for
-# showing impact on the overall ecosystem. 
-
-# One thing to note - the biomass time series would be strengthened considerably if we had mass values for general groups like 
-# "fish" and "birds", but estimating here might undermine the exercise. 
+# - Counts remain a cleaner signal of short-term activity and seasonality.
+# - Biomass is inherently more volatile, because a few heavy taxa can dominate weekly total
+# - Use counts to track temporal patterns efficiently, and biomass to describe ecological impact.
 
 
 
 
-########################################################
-# Weekly biomass model using species groups 
-########################################################
+# # ---------------------------------------------------
+# # 4-week rolling mean smoothing and ARIMA refit
+# # ---------------------------------------------------
 
-# Again, the plot below is not particularly helpful because we lose so much data from groups such as "birds" and "fish". 
+# Why a 4-week rolling mean?
+# Weekly biomass is spiky because a few heavy taxa can dominate single weeks. A 4-week mean reduces high-frequency 
+# noise so underlying trends and seasonal signals are easier to see.
 
-# weekly biomass per size group
-weekly_biomass_group <- offtake_df %>%
+# This is preferred to a monthly total because the 4-week rolling mean smooths short-term spikes while keeping weekly 
+# timing and resolution, whereas monthly totals collapse detail, and can shift or dilute real peaks.
+
+# =========================
+# Build raw and 4w-smoothed series by size_group
+# =========================
+weekly_biomass_by_group_raw <- offtake_df %>%
   dplyr::group_by(size_group, week_index) %>%
   dplyr::summarise(total_biomass_kg = sum(biomass_kg, na.rm = TRUE), .groups = "drop") %>%
   tsibble::as_tsibble(key = size_group, index = week_index) %>%
   tsibble::fill_gaps(total_biomass_kg = 0) %>%
-  dplyr::mutate(log_biomass = log1p(total_biomass_kg))
+  dplyr::mutate(
+    log_biomass = log1p(total_biomass_kg),
+    size_group = factor(size_group, levels = c("fish", "small_bird", "large_bird", "small_mammal", "large_mammal"))
+  )
 
-# Fit ARIMA models to log-biomass per group
-models_biomass_group <- weekly_biomass_group %>%
-  fabletools::model(ARIMA(log_biomass))
+weekly_biomass_by_group_roll4 <- weekly_biomass_by_group_raw %>%
+  dplyr::arrange(size_group, week_index) %>%
+  dplyr::group_by(size_group) %>%
+  dplyr::mutate(log_biomass_roll4 = zoo::rollmean(log_biomass, k = 4, align = "right", fill = NA_real_)) %>%
+  dplyr::ungroup()
 
-
-
-weekly_biomass_group %>%
-  autoplot(log_biomass) +
+# =========================
+# Plot: single panel, 4w mean by group (raw in background for context)
+# =========================
+weekly_biomass_by_group_roll4 %>%
+  ggplot2::ggplot(ggplot2::aes(x = week_index, colour = size_group)) +
+  ggplot2::geom_line(ggplot2::aes(y = log_biomass), linewidth = 0.4, alpha = 0.25, show.legend = FALSE) +
+  ggplot2::geom_line(ggplot2::aes(y = log_biomass_roll4), linewidth = 1.0, na.rm = TRUE) +
   ggplot2::labs(
-    title = "Weekly biomass offtake by size/method group (log scale)",
+    title = "Weekly log biomass by size group, 4-week rolling mean",
     x = "Week index",
-    y = "log1p(total biomass, kg)"
+    y = "log(1 + biomass kg)",
+    colour = "Group"
   ) +
   ggplot2::theme_minimal() +
-  ggplot2::facet_wrap(~ size_group, ncol = 1, scales = "free_y")
+  ggplot2::theme(legend.position = "bottom",
+                 panel.grid.minor = ggplot2::element_blank())
+
+# =========================
+# Did smoothing help? Fit-vs-forecast tests
+# =========================
+
+# 1) Hold-out forecast comparison (last h weeks)
+h <- 8  # change if you prefer a different hold-out
+last_week <- max(weekly_biomass_by_group_raw$week_index, na.rm = TRUE)
+train_end <- last_week - h
+
+train_raw   <- weekly_biomass_by_group_raw   %>% dplyr::filter(week_index <= train_end)
+test_raw    <- weekly_biomass_by_group_raw   %>% dplyr::filter(week_index >  train_end)
+
+train_roll4 <- weekly_biomass_by_group_roll4 %>% dplyr::filter(week_index <= train_end) %>% tidyr::drop_na(log_biomass_roll4)
+test_roll4  <- weekly_biomass_by_group_roll4 %>% dplyr::filter(week_index >  train_end)
+
+# Fit ARIMA to each series per group
+fit_raw   <- train_raw   %>% model(ARIMA(log_biomass))
+fit_roll4 <- train_roll4 %>% model(ARIMA(log_biomass_roll4))
+
+# Forecast h steps and compute accuracy against their respective targets
+fc_raw   <- fit_raw   %>% forecast(h = h)
+fc_roll4 <- fit_roll4 %>% forecast(h = h)
+
+acc_raw <- fabletools::accuracy(fc_raw, test_raw) %>%
+  dplyr::transmute(size_group, Series = "Raw", RMSE, MAE, MAPE)
+
+acc_roll4 <- fabletools::accuracy(fc_roll4, test_roll4) %>%
+  dplyr::transmute(size_group, Series = "Roll4", RMSE, MAE, MAPE)
+
+acc_compare_groups <- acc_raw %>%
+  dplyr::left_join(acc_roll4, by = "size_group", suffix = c("_raw", "_roll4")) %>%
+  dplyr::mutate(
+    RMSE_delta = RMSE_roll4 - RMSE_raw,
+    MAE_delta  = MAE_roll4  - MAE_raw,
+    MAPE_delta = MAPE_roll4 - MAPE_raw
+  ) %>%
+  dplyr::arrange(size_group)
+
+acc_compare_groups
+# Interpretation: negative deltas mean the 4-week mean improved forecast accuracy for that group.
+
+# 2) In-sample fit comparison (AIC, BIC, residual variance)
+gl_raw   <- fabletools::glance(fit_raw)   %>% dplyr::mutate(Series = "Raw")
+gl_roll4 <- fabletools::glance(fit_roll4) %>% dplyr::mutate(Series = "Roll4")
+
+model_compare_groups <- dplyr::bind_rows(gl_raw, gl_roll4) %>%
+  dplyr::select(size_group, Series, AIC, AICc, BIC, sigma2, log_lik) %>%
+  dplyr::arrange(size_group, Series)
+
+model_compare_groups
 
 
-# this approach (using species groups) doesn't yield great results because we're missing mass values for the majority of the data 
-# (e.g. the records labelled 'fish', 'birds' etc which we don't have mass values for).
+# These results are super clear, the 4-week mean gives a much cleaner signal in every group.
+#
+# 
+# - AIC drops massively for Roll4 in all groups, meaning the smoothed series are far easier for ARIMA to model.
+# - Residual variance shrinks by ~90 percent across the board, so weekly noise is largely tamed.
+
 
 
 
@@ -1031,6 +1109,7 @@ AIC(glmm_ns, glmm_rs)
 
 
 # OK, now we'll move onto the consumption df. For simplicity, we'll do this in another script 
+
 
 
 
