@@ -1104,15 +1104,202 @@ AIC(glmm_ns, glmm_rs)
 
 
 
+### Code addition from Feedback 07th October ###
+
+# ============================================================
+# Offtake: seasonality across species categories (counts vs biomass)
+# ============================================================
+
+# 1) Make a season factor (Winter, Spring, Summer, Autumn)
+offtake_season <- offtake_df %>%
+  dplyr::mutate(
+    date  = as.Date(date),
+    month = lubridate::month(date),
+    season = dplyr::case_when(
+      month %in% c(12, 1, 2) ~ "Winter",
+      month %in% c(3, 4, 5)  ~ "Spring",
+      month %in% c(6, 7, 8)  ~ "Summer",
+      month %in% c(9, 10, 11) ~ "Autumn",
+      TRUE ~ NA_character_
+    ),
+    season = factor(season, levels = c("Winter","Spring","Summer","Autumn"))
+  )
+
+# Choose your category variable: here we use size_group from your head()
+cat_var <- "size_group"
+
+# 2) Season x category summaries: counts and biomass
+season_cat <- offtake_season %>%
+  dplyr::filter(!is.na(season), !is.na(.data[[cat_var]])) %>%
+  dplyr::group_by(season, !!rlang::sym(cat_var)) %>%
+  dplyr::summarise(
+    individuals = sum(individuals, na.rm = TRUE),
+    biomass_kg  = sum(biomass_kg, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::rename(category = !!rlang::sym(cat_var))
+
+
+# 4) Optional: weekly seasonality by biomass (smooth lines across the year)
+biomass_week <- offtake_season %>%
+  dplyr::mutate(week_in_year = as.numeric(((week_index - 1) %% 52) + 1)) %>%
+  dplyr::filter(!is.na(week_in_year)) %>%
+  dplyr::group_by(week_in_year, !!rlang::sym(cat_var)) %>%
+  dplyr::summarise(biomass_kg = sum(biomass_kg, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::rename(category = !!rlang::sym(cat_var))
+
+ggplot2::ggplot(biomass_week,
+                ggplot2::aes(x = week_in_year, y = biomass_kg, colour = category)) +
+  ggplot2::geom_line() +
+  ggplot2::scale_y_log10() +
+  ggplot2::labs(
+    title = "Weekly biomass offtake by category",
+    x = "Week of year", y = "Biomass (kg)"
+  )
+
+
+
+# ============================================================
+#### Fit a GAM as the raw biomass is very difficult to interpret
+# ============================================================
+
+# Ensure factor + no NAs
+biomass_week <- biomass_week %>%
+  dplyr::filter(!is.na(category), !is.na(week_in_year)) %>%
+  dplyr::mutate(
+    category    = factor(category),
+    biomass_kg  = pmax(biomass_kg, 0) + 1e-6  # avoid zeros for log link
+  )
+
+# Cyclic GAM for seasonal smoothing (Gamma w/ log link fits biomass)
+gam_biomass <- mgcv::gam(
+  biomass_kg ~ s(week_in_year, bs = "cc", k = 10) + s(category, bs = "re"),
+  data   = biomass_week,
+  family = Gamma(link = "log"),
+  method = "REML",
+  knots  = list(week_in_year = c(0.5, 52.5))
+)
+
+# Smoothed predictions
+biomass_week$fit_gam <- as.numeric(predict(gam_biomass, type = "response"))
+
+# Plot: smoothed seasonal curves (log y for readability)
+ggplot2::ggplot(biomass_week,
+                ggplot2::aes(x = week_in_year, y = fit_gam, colour = category)) +
+  ggplot2::geom_line(linewidth = 1.2) +
+  ggplot2::scale_y_log10() +
+  ggplot2::labs(
+    title = "Smoothed weekly biomass offtake by category (cyclic GAM)",
+    x = "Week of year", y = "Predicted biomass (kg, log10 scale)"
+  ) +
+  ggplot2::theme_minimal()
 
 
 
 
-# OK, now we'll move onto the consumption df. For simplicity, we'll do this in another script 
+#### Now fit the same for the raw counts, to compare to the biomass above ####
+
+
+
+# 1) Weekly totals (counts)
+counts_week <- offtake_season %>%
+  dplyr::mutate(week_in_year = as.numeric(((week_index - 1) %% 52) + 1)) %>%
+  dplyr::filter(!is.na(week_in_year), !is.na(.data[[cat_var]])) %>%
+  dplyr::group_by(week_in_year, !!rlang::sym(cat_var)) %>%
+  dplyr::summarise(individuals = sum(individuals, na.rm = TRUE), .groups = "drop") %>%
+  dplyr::rename(category = !!rlang::sym(cat_var)) %>%
+  dplyr::mutate(category = factor(category))
+
+# 2) Cyclic GAM smoothing for counts (Negative Binomial)
+gam_counts <- mgcv::gam(
+  individuals ~ s(week_in_year, bs = "cc", k = 10) + s(category, bs = "re"),
+  data   = counts_week,
+  family = mgcv::nb(),
+  method = "REML",
+  knots  = list(week_in_year = c(0.5, 52.5))
+)
+
+# 3) Predicted smooth counts
+counts_week$fit_gam <- as.numeric(predict(gam_counts, type = "response"))
+
+# 4) Plot: smoothed seasonal curves (log y to match biomass plot)
+ggplot2::ggplot(counts_week,
+                ggplot2::aes(x = week_in_year, y = fit_gam, colour = category)) +
+  ggplot2::geom_line(linewidth = 1.2) +
+  ggplot2::scale_y_log10() +
+  ggplot2::labs(
+    title = "Smoothed weekly offtake COUNTS (cyclic GAM)",
+    x = "Week of year", y = "Predicted count (log10 scale)"
+  ) +
+  ggplot2::theme_minimal()
+
+
+
+
+# Summary tables for key stats
+summary(gam_counts)
+summary(gam_biomass)
+summary(gam_counts)$s.table
+summary(gam_biomass)$s.table
+
+# Deviance explained and adjusted R²
+list(
+  counts_dev = summary(gam_counts)$dev.expl,
+  counts_r2  = summary(gam_counts)$r.sq,
+  biomass_dev = summary(gam_biomass)$dev.expl,
+  biomass_r2  = summary(gam_biomass)$r.sq
+)
 
 
 
 
 
+# Testing for underfit or overfit of the smooth GAM
+mgcv::gam.check(gam_counts)    # look at 'k-index' and its p-value
+mgcv::gam.check(gam_biomass)
 
 
+
+# ============================================================
+### Summary for this addition ###
+# ============================================================
+
+
+### Approach ###
+
+# Here, I used GAMs with cyclic smoothers to describe seasonal patterns in hunting offtake. The cyclic smoother treats 
+# the year as a continuous loop (week 52 connects to week 1), ideal for seasonal data.
+
+
+# We compared offtake counts and offtake biomass. For offtake, we used a Negative Binomial family for overdispersed count data.
+# Biomass used a Gamma(log) family since biomass is continuous and positive.
+
+# Including s(category, bs = "re") accounts for differences in baseline level of hunting between taxonomic or size groups 
+# (e.g. small birds vs mammals).
+
+# This approach overall lets us test whether hunting intensity or total biomass varies seasonally, 
+# and whether the shape of that seasonal pattern differs across taxa.
+
+
+### Results ###
+
+# Both models show a clear seasonal signal, with non-linear fluctuations through the year.
+
+# Offtake counts show a stronger seasonal pattern and higher explanatory power (Deviance ≈ 82 %).
+# Hunting events peak and dip sharply across the year, suggesting accessibility or activity cycles.
+
+# Biomass shows a similar but less pronounced cycle (Deviance ≈ 57 %), implying that although hunting frequency changes seasonally,
+# the total mass removed is buffered - likely because bird-dominated peaks contribute many individuals but little mass, while 
+# mammal periods yield fewer but heavier carcasses.
+
+# In both cases, taxonomic category clearly accounts for the distinctive baseline variation, confirming that differences between 
+# groups (rather than just time) drive much of the variation in totals.
+
+
+
+### Testing for underfit or overfit of the smoothing ### 
+
+
+# I verified the adequacy of the basis dimension (k) using gam.check(). 
+# For both count and biomass models, the k-index (~1.0, p > 0.7) and effective degrees of freedom well below k′ 
+# confirm that smoothing was neither over- nor underfitted.

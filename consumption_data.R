@@ -825,9 +825,6 @@ print(summary(glm_cat))
 # --------------------------------------------------------------------------------
 
 
-
-
-
 # --------------------------
 ### Source of wild meat ###
 # --------------------------
@@ -897,8 +894,6 @@ summary(glm_subtribe_controls)
 
 
 
-
-
 # --------------------------
 ### taxonomy ###
 # --------------------------
@@ -925,4 +920,187 @@ ggplot2::ggplot(taxon_season,
     y = "Share of wild meat consumption",
     fill = "Taxon group"
   )
+
+
+
+# --------------------------
+### wealth power correlation check ###
+# --------------------------
+
+
+# change instances of "3" in power column to "c"
+consumption_df$power[consumption_df$power == "3"] <- "c"
+
+
+
+# Household-level data
+wp_df <- consumption_df %>%
+  dplyr::distinct(id, wealth, power)
+
+# Cross-tabulation
+wp_tab <- table(wp_df$wealth, wp_df$power)
+print(wp_tab)
+
+# Chi-squared test
+chisq.test(wp_tab)
+
+# Fisher’s exact test (better if table is sparse)
+fisher.test(wp_tab)
+
+# Cramer's V (effect size)
+cramers_v <- function(tab) {
+  chi <- suppressWarnings(chisq.test(tab, correct = FALSE)$statistic)
+  n   <- sum(tab)
+  k   <- min(nrow(tab), ncol(tab))
+  as.numeric(sqrt(chi / (n * (k - 1))))
+}
+cramers_v(wp_tab)
+
+
+# Correlation results
+# here’s how to interpret those results:
+# Chi-squared test: X² = 11.9, df = 9, p = 0.22 → no statistically significant association between wealth and power.
+# Fisher’s exact test: p = 0.25 → same conclusion, robust to sparse cells.
+# Cramer’s V: 0.30 → a small-to-moderate association (rule of thumb: ~0.1 = weak, ~0.3 = moderate, ~0.5+ = strong).
+
+
+
+
+
+
+
+# --------------------------
+# Check effect of wealth  on amount of wild meat consumed (household totals)
+# --------------------------
+
+# Collapse to household-level totals
+hh_wild <- consumption_df %>%
+  dplyr::filter(meat == "wild") %>%
+  dplyr::group_by(id, wealth) %>%
+  dplyr::summarise(total_wild = sum(times, na.rm = TRUE), .groups = "drop")
+
+# Fit Poisson first
+glm_wild <- glm(total_wild ~ wealth, family = poisson, data = hh_wild)
+summary(glm_wild)
+
+#Yes
+
+# If overdispersion is present, try Negative Binomial
+glm_wild_nb <- MASS::glm.nb(total_wild ~ wealth, data = hh_wild)
+summary(glm_wild_nb)
+
+# Quick plot of distributions
+ggplot2::ggplot(hh_wild, aes(x = wealth, y = total_wild)) +
+  geom_jitter(width = 0.2, alpha = 0.6) +
+  stat_summary(fun = mean, geom = "point", colour = "red", size = 3) +
+  labs(title = "Wild meat totals by wealth group",
+       y = "Total wild meat events per household", x = "Wealth group")
+
+
+
+# This test is different from what we were looking at earlier on this topic:
+
+# Earlier models mixed wild and domestic worked with proportions/odds. 
+# Those showed no effect of wealth on reliance on wild vs domestic.
+# This new model ignores domestic meat entirely and focuses only on absolute wild meat totals.
+
+# Results: Here, category c consumes significantly more wild meat than a, and wealth d is borderline higher too.
+#
+# So if you ask: “Does wealth change the raw amount of wild meat consumed?” - So the least wealthy households are consuming 
+# the most amount of meat. 
+
+
+
+
+# --------------------------
+# Total meat consumption (domestic and wild)
+# --------------------------
+
+# 1) Household-level totals and shares
+hh_meat <- consumption_df %>%
+  dplyr::filter(meat %in% c("wild","domestic")) %>%
+  dplyr::group_by(id, wealth, subtribe) %>%
+  dplyr::summarise(
+    wild_total     = sum(times[meat == "wild"], na.rm = TRUE),
+    domestic_total = sum(times[meat == "domestic"], na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    total_meat    = wild_total + domestic_total,
+    reliance_wild = dplyr::if_else(total_meat > 0, wild_total / total_meat, NA_real_)
+  )
+
+# 2) Quick visuals
+# Total meat per household by wealth (with mean point)
+ggplot2::ggplot(hh_meat, ggplot2::aes(x = wealth, y = total_meat)) +
+  ggplot2::geom_jitter(width = 0.2, alpha = 0.6) +
+  ggplot2::stat_summary(fun = mean, geom = "point", size = 3, colour = "red") +
+  ggplot2::labs(title = "Total meat per household by wealth",
+                x = "Wealth", y = "Total meat events")
+
+# Reliance on wild per household by subtribe (violin + median)
+ggplot2::ggplot(hh_meat, ggplot2::aes(x = subtribe, y = reliance_wild)) +
+  ggplot2::geom_violin(fill = NA) +
+  ggplot2::stat_summary(fun = median, geom = "point", size = 3) +
+  ggplot2::labs(title = "Reliance on wild meat by subtribe",
+                x = "Subtribe", y = "Proportion wild of total meat")
+
+# Stacked shares of wild vs domestic by subtribe (aggregated)
+subtribe_shares <- hh_meat %>%
+  dplyr::group_by(subtribe) %>%
+  dplyr::summarise(wild = sum(wild_total), domestic = sum(domestic_total), .groups = "drop") %>%
+  tidyr::pivot_longer(c(wild, domestic), names_to = "meat", values_to = "total") %>%
+  dplyr::group_by(subtribe) %>%
+  dplyr::mutate(share = total / sum(total))
+
+ggplot2::ggplot(subtribe_shares,
+                ggplot2::aes(x = subtribe, y = share, fill = meat)) +
+  ggplot2::geom_col(position = "fill") +
+  ggplot2::labs(title = "Wild vs domestic shares by subtribe",
+                x = "Subtribe", y = "Share of all meat", fill = "Meat")
+
+# 3) Tests
+# Does wealth predict the amount of all meat consumed?
+glm_total_nb <- MASS::glm.nb(total_meat ~ wealth, data = hh_meat)
+summary(glm_total_nb)
+
+# Does subtribe predict the amount of all meat consumed?
+glm_total_nb_sub <- MASS::glm.nb(total_meat ~ subtribe, data = hh_meat)
+summary(glm_total_nb_sub)
+
+# Does wealth shift the balance of wild vs domestic at household level?
+#     Use binomial on the counts of wild vs domestic per household
+glm_balance_w <- glm(cbind(wild_total, domestic_total) ~ wealth,
+                     data = hh_meat, family = binomial())
+summary(glm_balance_w)
+
+# Same balance test for subtribe
+glm_balance_s <- glm(cbind(wild_total, domestic_total) ~ subtribe,
+                     data = hh_meat, family = binomial())
+summary(glm_balance_s)
+
+# combined model: scale and composition together
+#     Scale: total_meat ~ wealth + subtribe (NB)
+#     Composition: cbind(wild, domestic) ~ wealth + subtribe (Binomial)
+glm_scale_nb   <- MASS::glm.nb(total_meat ~ wealth + subtribe, data = hh_meat)
+glm_comp_binom <- glm(cbind(wild_total, domestic_total) ~ wealth + subtribe,
+                      data = hh_meat, family = binomial())
+summary(glm_scale_nb)
+summary(glm_comp_binom)
+
+# Convenience: incidence rate ratios for scale model
+exp(cbind(IRR = coef(glm_scale_nb), confint.default(glm_scale_nb)))
+
+
+
+
+# NOTE:
+# Earlier tests showed no wealth effect on the *balance* of wild vs domestic meat.
+# This analysis adds that the least wealthy households (c/d) do consume more total meat overall,
+# even though the proportion that is wild vs domestic stays the same.
+
+# For subtribes: total meat amounts are similar, but Makury rely more on domestic
+# (lower wild share), consistent with earlier subtribe models.
+
+
 
